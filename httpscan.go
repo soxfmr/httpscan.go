@@ -81,7 +81,7 @@ func guessEncoding(bytes []byte) string {
 }
 
 func extractTitle(content string) string {
-    pattern := regexp.MustCompile("(?s)<title>(.+?)</title>")
+    pattern := regexp.MustCompile("(?is)<title>(.+?)</title>")
     strip := regexp.MustCompile("(?s)[\t\n\r]+")
 
     match := pattern.FindStringSubmatch(content)
