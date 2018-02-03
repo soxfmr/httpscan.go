@@ -22,7 +22,7 @@ Usage of ./httpscan:
     	Default timeout for connection session (default 10)
 ```
 
-Scanning a CIDR addresses:
+Scanning the CIDR addresses:
 ```
 $ ./httpscan -port 8080 10.0.0.0/24 192.168.1.0/24
 ```
@@ -32,7 +32,7 @@ Specify a proxy server:
 $ ./httpscan -proxy socks5://127.0.0.1:1080 10.0.0.0/24
 ```
 
-The connection will establish with SSL/TSL if the port prefix with the `s` alphabet:
+The connection will establish with SSL/TLS if the port prefix with the `s` alphabet:
 ```
 $ ./httpscan -port s443 10.0.0.0/24
 ```
