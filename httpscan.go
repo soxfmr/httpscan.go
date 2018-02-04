@@ -43,9 +43,34 @@ type Option struct {
     proxyURL *url.URL
 }
 
-func makeRequest(url string, proxy *url.URL, timeout int) ([]byte, int, string, error) {
+type Task interface {
+    scan() ([]byte, int, string, error)
+    getHost() string
+    getService() ServicePort
+}
+
+type HttpScanTask struct {
+    host string
+    service ServicePort
+    proxy *url.URL
+    timeout int
+}
+
+func (task HttpScanTask) scan() ([]byte, int, string, error) {
+    var schema string
+    if task.service.ssl {
+        schema = "https://"
+    } else {
+        schema = "http://"
+    }
+
+    url := schema + task.host + ":" + strconv.Itoa(task.service.port)
+
     transport := &http.Transport {
-        Proxy: http.ProxyURL(proxy),
+        Proxy: http.ProxyURL(task.proxy),
+        DialContext: (&net.Dialer{
+            Timeout: time.Duration(task.timeout) * time.Second,
+        }).DialContext,
         TLSClientConfig: &tls.Config {
             InsecureSkipVerify: true,
         },
@@ -53,7 +78,6 @@ func makeRequest(url string, proxy *url.URL, timeout int) ([]byte, int, string, 
 
     client := &http.Client{ 
         Transport: transport,
-        Timeout: time.Duration(timeout) * time.Second,
     }
 
     resp, err := client.Get(url)
@@ -68,6 +92,14 @@ func makeRequest(url string, proxy *url.URL, timeout int) ([]byte, int, string, 
     }
 
     return content, resp.StatusCode, resp.Header.Get("Server"), err
+}
+
+func (task HttpScanTask) getHost() (string) {
+    return task.host
+}
+
+func (task HttpScanTask) getService() ServicePort {
+    return task.service
 }
 
 func guessEncoding(bytes []byte) string {
@@ -167,7 +199,7 @@ func prologue() {
     fmt.Println(delimiter)
 }
 
-func present(url string, service ServicePort, result []byte, banner string, status int) {
+func present(host string, service ServicePort, result []byte, status int, banner string) {
     port := strconv.Itoa(service.port)
     if service.ssl {
         port = port + " (SSL)"
@@ -181,7 +213,7 @@ func present(url string, service ServicePort, result []byte, banner string, stat
     banner = shrinkText(banner, maxBannerAlign)
     title := shrinkText(extractTitle(content), maxTitleAlign)
 
-    log := fmt.Sprintf(formatString, url, port, strconv.Itoa(status), 
+    log := fmt.Sprintf(formatString, host, port, strconv.Itoa(status), 
         calcAlign(banner, maxBannerAlign), banner, calcAlign(title, maxTitleAlign), title)
     
     // fmt.Println(delimiter)
@@ -189,21 +221,11 @@ func present(url string, service ServicePort, result []byte, banner string, stat
     fmt.Println(delimiter)
 }
 
-func worker(hosts <-chan string, services []ServicePort, options Option, lock *sync.WaitGroup) {
-    for host := range hosts {
-        for _, service := range services {
-            var schema string
-            if service.ssl {
-                schema = "https://"
-            } else {
-                schema = "http://"
-            }
-
-            target := schema + host + ":" + strconv.Itoa(service.port)
-            result, status, banner, err := makeRequest(target, options.proxyURL, options.timeout)
-            if err == nil {
-                present(host, service, result, banner, status)
-            }
+func worker(tasks <-chan Task, options Option, lock *sync.WaitGroup) {
+    for task := range tasks {
+        result, status, banner, err := task.scan()
+        if err == nil {
+            present(task.getHost(), task.getService(), result, status, banner)
         }
         lock.Done()
     }
@@ -211,10 +233,10 @@ func worker(hosts <-chan string, services []ServicePort, options Option, lock *s
 
 func startScan(targets []string, services []ServicePort, options Option) {
     var lock sync.WaitGroup
-    hosts := make(chan string, 100)
+    tasks := make(chan Task, options.threads)
 
     for i := 0; i < options.threads; i++ {
-        go worker(hosts, services, options, &lock)
+        go worker(tasks, options, &lock)
     }
 
     prologue()
@@ -222,11 +244,13 @@ func startScan(targets []string, services []ServicePort, options Option) {
     for _, target := range targets {
         // parse the traget and send to queue
         for _, host := range parseTarget(target) {
-            hosts <- host
-            lock.Add(1)
+            for _, service := range services {
+                tasks <- HttpScanTask { host, service, options.proxyURL, options.timeout }
+                lock.Add(1)
+            }
         }
     }
-    close(hosts)
+    close(tasks)
 
     lock.Wait()
 }
