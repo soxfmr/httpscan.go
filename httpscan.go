@@ -32,6 +32,7 @@ var logHeader = fmt.Sprintf(formatString, "Host", "Port", "Status", maxBannerAli
 type ServicePort struct {
     ssl bool
     port int
+    protocol string
 }
 
 type Option struct {
@@ -41,6 +42,8 @@ type Option struct {
     timeout int
     proxy string
     proxyURL *url.URL
+    transportLayerScan bool
+    redirect string
 }
 
 type Task interface {
@@ -54,6 +57,32 @@ type HttpScanTask struct {
     service ServicePort
     proxy *url.URL
     timeout int
+}
+
+type TransportLayerScanTask struct {
+    host string
+    service ServicePort
+    timeout int
+}
+
+func (task TransportLayerScanTask) scan() ([]byte, int, string, error) {
+    target := fmt.Sprintf("%s:%d", task.host, task.service.port)
+    conn, err := net.DialTimeout(task.service.protocol, target, time.Duration(task.timeout) * time.Second)
+    if err != nil {
+        return nil, 0, "", err;
+    }
+
+    conn.Close()
+
+    return nil, 0, "", nil
+}
+
+func (task TransportLayerScanTask) getHost() (string) {
+    return task.host
+}
+
+func (task TransportLayerScanTask) getService() ServicePort {
+    return task.service
 }
 
 func (task HttpScanTask) scan() ([]byte, int, string, error) {
@@ -177,7 +206,7 @@ func calcAlign(text string, max int) int {
     realLen := utf8.RuneCountInString(text)
 
     // All of ASCII char, we'r safe :)
-    if mbsLen == realLen {
+    if mbsLen == 0 || mbsLen == realLen {
         return max
     }
 
@@ -200,18 +229,24 @@ func prologue() {
 }
 
 func present(host string, service ServicePort, result []byte, status int, banner string) {
+    var title string
     port := strconv.Itoa(service.port)
+
     if service.ssl {
         port = port + " (SSL)"
+    } else if service.protocol == "UDP" {
+        port = port + " (UDP)"
     }
 
-    encoding := guessEncoding(result)
+    if len(banner) > 0 {
+        encoding := guessEncoding(result)
 
-    decoder := mahonia.NewDecoder(encoding)
-    content := decoder.ConvertString(string(result))
-
-    banner = shrinkText(banner, maxBannerAlign)
-    title := shrinkText(extractTitle(content), maxTitleAlign)
+        decoder := mahonia.NewDecoder(encoding)
+        content := decoder.ConvertString(string(result))
+    
+        banner = shrinkText(banner, maxBannerAlign)
+        title = shrinkText(extractTitle(content), maxTitleAlign)
+    }
 
     log := fmt.Sprintf(formatString, host, port, strconv.Itoa(status), 
         calcAlign(banner, maxBannerAlign), banner, calcAlign(title, maxTitleAlign), title)
@@ -245,7 +280,11 @@ func startScan(targets []string, services []ServicePort, options Option) {
         // parse the traget and send to queue
         for _, host := range parseTarget(target) {
             for _, service := range services {
-                tasks <- HttpScanTask { host, service, options.proxyURL, options.timeout }
+                if options.transportLayerScan {
+                    tasks <- TransportLayerScanTask { host, service, options.timeout }
+                } else {
+                    tasks <- HttpScanTask { host, service, options.proxyURL, options.timeout }
+                }
                 lock.Add(1)
             }
         }
@@ -297,6 +336,7 @@ func parsePort(ports string) []ServicePort {
         port = strings.Trim(port, " ")
         ssl := false
         upper := port
+        protocol := "tcp"
         
         // 8001-8009
         if strings.Contains(port, "-") {
@@ -312,14 +352,16 @@ func parsePort(ports string) []ServicePort {
         } else if strings.HasPrefix(port, "s") {
             ssl = true
             port = port[1:]
-            upper = port
+        } else if strings.HasPrefix(port, "u") {
+            protocol = "udp"
+            upper = port[1:]
         }
-
+        
         start, _ := strconv.Atoi(port)
         end, _ := strconv.Atoi(upper)
 
         for i := start; i <= end; i++ {
-            service := ServicePort{ ssl, i }
+            service := ServicePort{ ssl, i, protocol }
             services = append(services, service)
         }
     }
@@ -327,19 +369,30 @@ func parsePort(ports string) []ServicePort {
 }
 
 func initArguments() (Option, []string) {
-    ports := flag.String("port", "80", "List of port(s) to be scan, such as 80,8000-8009,s443 etc. Port starts with 's' prefix indicate that the connection will be negotiate with SSL/TLS")
+    ports := flag.String("port", "80", "List of port(s) to be scan, such as 80,8000-8009,s443 etc. Port starts with 's' prefix indicate that the connection will be negotiate with SSL/TLS. Similar starts with 'u' for UDP connection")
     filename := flag.String("file", "", "Specify a local file contains a list of URLs")
     threads := flag.Int("threads", 20, "Maxinum number of threads")
     timeout := flag.Int("timeout", 10, "Default timeout for connection session")
-    proxy := flag.String("proxy", "", "Specify a proxy server for all connection, currently HTTP and SOCKS5 are supported")
+    proxy := flag.String("proxy", "", "Specify a proxy server for all connection, currently HTTP and SOCKS5 are supported, this work only on the HTTP mode")
+    transportLayerScan := flag.Bool("tcp", false, "Switch the scanning mode to TCP/UDP instead of HTTP request")
+    redirect := flag.String("o", "", "Redirect the output to local file")
 
     flag.Parse()
 
-    return Option{ *ports, *filename, *threads, *timeout, *proxy, nil }, flag.Args()
+    return Option{ *ports, *filename, *threads, *timeout, *proxy, nil, *transportLayerScan, *redirect }, flag.Args()
 }
 
 func main() {
     options, targets := initArguments()
+
+    if len(options.redirect) > 0 {
+        handle, err := os.OpenFile(options.redirect, os.O_RDWR | os.O_CREATE, 0755)
+        if err != nil {
+            log.Fatal(err)
+        }
+        
+        os.Stdout = handle
+    }
 
     if options.filename != "" {
         read := readTraget(options.filename)
