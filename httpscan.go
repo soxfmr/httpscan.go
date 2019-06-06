@@ -1,25 +1,25 @@
-package main 
+package main
 
 import (
-    "os"
-    "fmt"
-    "net"
-    "log"
-    "sync"
-    "time"
-    "flag"
-    "sort"
     "bufio"
+    "crypto/tls"
+    "flag"
+    "fmt"
+    "github.com/axgle/mahonia"
+    "github.com/saintfish/chardet"
+    "io/ioutil"
+    "log"
+    "net"
+    "net/http"
+    "net/url"
+    "os"
     "regexp"
+    "sort"
     "strconv"
     "strings"
-    "net/url"
-    "net/http"
-    "crypto/tls"
-    "io/ioutil"
+    "sync"
+    "time"
     "unicode/utf8"
-    mahonia "github.com/axgle/mahonia"
-    chardet "github.com/saintfish/chardet"
 )
 
 var maxTitleAlign = 36
@@ -42,6 +42,7 @@ type Option struct {
     timeout int
     proxy string
     proxyURL *url.URL
+    failover bool
     transportLayerScan bool
     redirect string
 }
@@ -50,6 +51,8 @@ type Task interface {
     scan() ([]byte, int, string, error)
     getHost() string
     getService() ServicePort
+    needReschedule() bool
+    schedule()
 }
 
 type HttpScanTask struct {
@@ -57,6 +60,7 @@ type HttpScanTask struct {
     service ServicePort
     proxy *url.URL
     timeout int
+    scheduled bool
 }
 
 type TransportLayerScanTask struct {
@@ -72,17 +76,27 @@ func (task TransportLayerScanTask) scan() ([]byte, int, string, error) {
         return nil, 0, "", err;
     }
 
-    conn.Close()
+    err = conn.Close()
+    if err != nil {
+        // Deal with unexpected connect closeds
+    }
 
     return nil, 0, "", nil
 }
 
-func (task TransportLayerScanTask) getHost() (string) {
+func (task TransportLayerScanTask) getHost() string {
     return task.host
 }
 
 func (task TransportLayerScanTask) getService() ServicePort {
     return task.service
+}
+
+func (task TransportLayerScanTask) needReschedule() bool {
+    return false
+}
+
+func (task *TransportLayerScanTask) schedule() {
 }
 
 func (task HttpScanTask) scan() ([]byte, int, string, error) {
@@ -113,22 +127,35 @@ func (task HttpScanTask) scan() ([]byte, int, string, error) {
     if err != nil {
         return nil, 0, "", err
     }
-    defer resp.Body.Close()
 
     content, err := ioutil.ReadAll(resp.Body)
     if err != nil {
         return nil, 0, "", err
     }
 
+    err = resp.Body.Close()
+    if err != nil {
+        // unexpected connection closed, receive the error to avoid the function been broken
+    }
+
     return content, resp.StatusCode, resp.Header.Get("Server"), err
 }
 
-func (task HttpScanTask) getHost() (string) {
+func (task HttpScanTask) getHost() string {
     return task.host
 }
 
 func (task HttpScanTask) getService() ServicePort {
     return task.service
+}
+
+func (task HttpScanTask) needReschedule() bool {
+    return ! task.scheduled && ! task.service.ssl
+}
+
+func (task *HttpScanTask) schedule() {
+    task.scheduled = true
+    task.service.ssl = true
 }
 
 func guessEncoding(bytes []byte) string {
@@ -153,7 +180,7 @@ func extractTitle(content string) string {
     return strings.Trim(strip.ReplaceAllString(match[1], ""), " ")
 }
 
-func readTraget(filename string) []string {
+func readTarget(filename string) []string {
     var targets []string
 
     file, err := os.Open(filename)
@@ -238,14 +265,15 @@ func present(host string, service ServicePort, result []byte, status int, banner
         port = port + " (UDP)"
     }
 
-    if len(banner) > 0 {
+    if len(result) > 0 {
         encoding := guessEncoding(result)
-
         decoder := mahonia.NewDecoder(encoding)
         content := decoder.ConvertString(string(result))
-    
-        banner = shrinkText(banner, maxBannerAlign)
         title = shrinkText(extractTitle(content), maxTitleAlign)
+    }
+
+    if len(banner) > 0 {
+        banner = shrinkText(banner, maxBannerAlign)
     }
 
     log := fmt.Sprintf(formatString, host, port, strconv.Itoa(status), 
@@ -256,11 +284,18 @@ func present(host string, service ServicePort, result []byte, status int, banner
     fmt.Println(delimiter)
 }
 
-func worker(tasks <-chan Task, options Option, lock *sync.WaitGroup) {
+func worker(tasks chan Task, options Option, lock *sync.WaitGroup) {
     for task := range tasks {
+    scan:
+        // fmt.Printf("host: %s, port: %d, ssl: %v\n", task.getHost(), task.getService().port, task.getService().ssl);
         result, status, banner, err := task.scan()
         if err == nil {
             present(task.getHost(), task.getService(), result, status, banner)
+        } else if options.failover && task.needReschedule() {
+            // fmt.Printf("Reschedule task %s:%d...\n", task.getHost(), task.getService().port)
+            // Re-schedule the task without decrement the sync lock
+            task.schedule()
+            goto scan
         }
         lock.Done()
     }
@@ -277,21 +312,22 @@ func startScan(targets []string, services []ServicePort, options Option) {
     prologue()
 
     for _, target := range targets {
-        // parse the traget and send to queue
+        // parse the target and send to queue
         for _, host := range parseTarget(target) {
             for _, service := range services {
                 if options.transportLayerScan {
-                    tasks <- TransportLayerScanTask { host, service, options.timeout }
+                    tasks <- &TransportLayerScanTask { host, service, options.timeout }
                 } else {
-                    tasks <- HttpScanTask { host, service, options.proxyURL, options.timeout }
+                    tasks <- &HttpScanTask { host, service, options.proxyURL, options.timeout, false }
                 }
                 lock.Add(1)
             }
         }
     }
-    close(tasks)
 
     lock.Wait()
+
+    close(tasks)
 }
 
 func nextAddr(address []byte) {
@@ -352,9 +388,11 @@ func parsePort(ports string) []ServicePort {
         } else if strings.HasPrefix(port, "s") {
             ssl = true
             port = port[1:]
+            upper = port
         } else if strings.HasPrefix(port, "u") {
             protocol = "udp"
-            upper = port[1:]
+            port = port[1:]
+            upper = port
         }
         
         start, _ := strconv.Atoi(port)
@@ -371,15 +409,16 @@ func parsePort(ports string) []ServicePort {
 func initArguments() (Option, []string) {
     ports := flag.String("port", "80", "List of port(s) to be scan, such as 80,8000-8009,s443 etc. Port starts with 's' prefix indicate that the connection will be negotiate with SSL/TLS. Similar starts with 'u' for UDP connection")
     filename := flag.String("file", "", "Specify a local file contains a list of URLs")
-    threads := flag.Int("threads", 20, "Maxinum number of threads")
+    threads := flag.Int("threads", 20, "Maximum number of threads")
     timeout := flag.Int("timeout", 10, "Default timeout for connection session")
     proxy := flag.String("proxy", "", "Specify a proxy server for all connection, currently HTTP and SOCKS5 are supported, this work only on the HTTP mode")
     transportLayerScan := flag.Bool("tcp", false, "Switch the scanning mode to TCP/UDP instead of HTTP request")
     redirect := flag.String("o", "", "Redirect the output to local file")
+    failover := flag.Bool("failover", false, "Fallback to HTTPS connection if the normal HTTP request was failed, this works on HTTP scan mode only")
 
     flag.Parse()
 
-    return Option{ *ports, *filename, *threads, *timeout, *proxy, nil, *transportLayerScan, *redirect }, flag.Args()
+    return Option{ *ports, *filename, *threads, *timeout, *proxy, nil, *failover, *transportLayerScan, *redirect }, flag.Args()
 }
 
 func main() {
@@ -395,7 +434,7 @@ func main() {
     }
 
     if options.filename != "" {
-        read := readTraget(options.filename)
+        read := readTarget(options.filename)
         targets = append(targets, read...)
     }
 
