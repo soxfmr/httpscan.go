@@ -8,7 +8,6 @@ import (
     "github.com/apoorvam/goterminal"
     "github.com/axgle/mahonia"
     "github.com/saintfish/chardet"
-    //"github.com/apoorvam/goterminal"
     "io/ioutil"
     "log"
     "net"
@@ -26,103 +25,103 @@ import (
 var formatString = "%s:%d [%s] [%d %s] [%s] [%s]"
 
 type ServicePort struct {
-    ssl bool
-    port int
-    protocol string
+    SSL bool
+    Port int
+    Protocol string
 }
 
 type Option struct {
-    ports string
-    filename string
-    threads int
-    timeout int
-    proxy string
-    proxyURL *url.URL
-    failover bool
-    transportLayerScan bool
-    redirectOutput bool
-    logFilename string
+    Ports string
+    Filename string
+    Threads int
+    Timeout int
+    Proxy string
+    ProxyURL *url.URL
+    Failover bool
+    TransportLayerScan bool
+    RedirectOutput bool
+    LogFilename string
 }
 
 type Result struct {
-    task Task
-    responseData []byte
-    status int
-    banner string
-    err error
+    Task Task
+    ResponseData []byte
+    Status int
+    Banner string
+    Error error
 }
 
 type Task interface {
-    scan() ([]byte, int, string, error)
-    getHost() string
-    getService() ServicePort
-    getProtoName() string
-    needReschedule() bool
-    schedule()
+    Scan() ([]byte, int, string, error)
+    GetHost() string
+    GetService() ServicePort
+    GetProtoName() string
+    NeedReschedule() bool
+    Schedule()
 }
 
 type HttpScanTask struct {
-    host string
-    service ServicePort
-    proxy *url.URL
-    timeout int
-    scheduled bool
+    Host string
+    Service ServicePort
+    Proxy *url.URL
+    Timeout int
+    Scheduled bool
 }
 
 type TransportLayerScanTask struct {
-    host string
-    service ServicePort
-    timeout int
+    Host string
+    Service ServicePort
+    Timeout int
 }
 
-func (task *TransportLayerScanTask) scan() ([]byte, int, string, error) {
-    target := fmt.Sprintf("%s:%d", task.host, task.service.port)
-    conn, err := net.DialTimeout(task.service.protocol, target, time.Duration(task.timeout) * time.Second)
+func (task *TransportLayerScanTask) Scan() ([]byte, int, string, error) {
+    target := fmt.Sprintf("%s:%d", task.Host, task.Service.Port)
+    conn, err := net.DialTimeout(task.Service.Protocol, target, time.Duration(task.Timeout) * time.Second)
     if err != nil {
-        return nil, 0, "", err;
+        return nil, 0, "", err
     }
 
     err = conn.Close()
     if err != nil {
-        // Deal with unexpected connect closeds
+        // Deal with problem when connection was closed unexpected
     }
 
     return nil, 0, "", nil
 }
 
-func (task *TransportLayerScanTask) getHost() string {
-    return task.host
+func (task *TransportLayerScanTask) GetHost() string {
+    return task.Host
 }
 
-func (task *TransportLayerScanTask) getService() ServicePort {
-    return task.service
+func (task *TransportLayerScanTask) GetService() ServicePort {
+    return task.Service
 }
 
-func (task *TransportLayerScanTask) needReschedule() bool {
+func (task *TransportLayerScanTask) NeedReschedule() bool {
     return false
 }
 
-func (task *TransportLayerScanTask) schedule() {
+func (task *TransportLayerScanTask) Schedule() {
 }
 
-func (task *TransportLayerScanTask) getProtoName() string {
-    return strings.ToUpper(task.service.protocol)
+func (task *TransportLayerScanTask) GetProtoName() string {
+    return strings.ToUpper(task.Service.Protocol)
 }
 
-func (task *HttpScanTask) scan() ([]byte, int, string, error) {
+func (task *HttpScanTask) Scan() ([]byte, int, string, error) {
     var schema string
-    if task.service.ssl {
+    if task.Service.SSL {
         schema = "https://"
     } else {
         schema = "http://"
     }
 
-    url := schema + task.host + ":" + strconv.Itoa(task.service.port)
+    uri := schema + task.Host + ":" + strconv.Itoa(task.Service.Port)
 
     transport := &http.Transport {
-        Proxy: http.ProxyURL(task.proxy),
+        Proxy: http.ProxyURL(task.Proxy),
         DialContext: (&net.Dialer{
-            Timeout: time.Duration(task.timeout) * time.Second,
+            Timeout: time.Duration(task.Timeout) * time.Second,
         }).DialContext,
         TLSClientConfig: &tls.Config {
             InsecureSkipVerify: true,
@@ -133,7 +132,7 @@ func (task *HttpScanTask) scan() ([]byte, int, string, error) {
         Transport: transport,
     }
 
-    resp, err := client.Get(url)
+    resp, err := client.Get(uri)
     if err != nil {
         return nil, 0, "", err
     }
@@ -151,32 +150,32 @@ func (task *HttpScanTask) scan() ([]byte, int, string, error) {
     return content, resp.StatusCode, resp.Header.Get("Server"), err
 }
 
-func (task *HttpScanTask) getHost() string {
-    return task.host
+func (task *HttpScanTask) GetHost() string {
+    return task.Host
 }
 
-func (task *HttpScanTask) getService() ServicePort {
-    return task.service
+func (task *HttpScanTask) GetService() ServicePort {
+    return task.Service
 }
 
-func (task *HttpScanTask) needReschedule() bool {
-    return ! task.scheduled && ! task.service.ssl
+func (task *HttpScanTask) NeedReschedule() bool {
+    return ! task.Scheduled && ! task.Service.SSL
 }
 
-func (task *HttpScanTask) schedule() {
-    task.scheduled = true
-    task.service.ssl = true
+func (task *HttpScanTask) Schedule() {
+    task.Scheduled = true
+    task.Service.SSL = true
 }
 
-func (task *HttpScanTask) getProtoName() string {
-    if task.service.ssl {
+func (task *HttpScanTask) GetProtoName() string {
+    if task.Service.SSL {
         return "HTTPS"
     } else {
         return "HTTP"
     }
 }
 
-func guessEncoding(bytes []byte) string {
+func GuessEncoding(bytes []byte) string {
     detector := chardet.NewHtmlDetector()
     result, err := detector.DetectBest(bytes)
     if err != nil || result.Confidence < 60 {
@@ -186,7 +185,7 @@ func guessEncoding(bytes []byte) string {
     return result.Charset
 }
 
-func extractTitle(content string) string {
+func ExtractTitle(content string) string {
     pattern := regexp.MustCompile("(?is)<title>(.+?)</title>")
     strip := regexp.MustCompile("(?s)[\t\n\r]+")
 
@@ -198,7 +197,7 @@ func extractTitle(content string) string {
     return strings.Trim(strip.ReplaceAllString(match[1], ""), " ")
 }
 
-func readTarget(filename string) []string {
+func ReadTarget(filename string) []string {
     var targets []string
 
     file, err := os.Open(filename)
@@ -215,32 +214,32 @@ func readTarget(filename string) []string {
     return targets
 }
 
-func present(result *Result) {
+func Present(result *Result) {
     var title string
 
-    if len(result.responseData) > 0 {
-        encoding := guessEncoding(result.responseData)
+    if len(result.ResponseData) > 0 {
+        encoding := GuessEncoding(result.ResponseData)
         decoder := mahonia.NewDecoder(encoding)
-        content := decoder.ConvertString(string(result.responseData))
-        title = extractTitle(content)
+        content := decoder.ConvertString(string(result.ResponseData))
+        title = ExtractTitle(content)
     }
 
-    task := result.task
-    log := fmt.Sprintf(formatString, task.getHost(), task.getService().port, task.getProtoName(),
-        result.status, http.StatusText(result.status), result.banner, title)
+    task := result.Task
+    output := fmt.Sprintf(formatString, task.GetHost(), task.GetService().Port, task.GetProtoName(),
+        result.Status, http.StatusText(result.Status), result.Banner, title)
 
-    fmt.Println(log)
+    fmt.Println(output)
 }
 
-func worker(tasks chan Task, results chan *Result, options Option) {
+func Worker(tasks chan Task, results chan *Result, options Option) {
     for task := range tasks {
     scan:
         // fmt.Printf("host: %s, port: %d, ssl: %v\n", task.getHost(), task.getService().port, task.getService().ssl);
-        responseData, status, banner, err := task.scan()
-        if err != nil && options.failover && task.needReschedule() {
+        responseData, status, banner, err := task.Scan()
+        if err != nil && options.Failover && task.NeedReschedule() {
             // fmt.Printf("Reschedule task %s:%d...\n", task.getHost(), task.getService().port)
             // Re-schedule the task
-            task.schedule()
+            task.Schedule()
             goto scan
         }
 
@@ -248,13 +247,13 @@ func worker(tasks chan Task, results chan *Result, options Option) {
     }
 }
 
-func startScan(hosts []string, services []ServicePort, options Option) {
+func StartScan(hosts []string, services []ServicePort, options Option) {
     var lock sync.WaitGroup
-    tasks := make(chan Task, options.threads)
+    tasks := make(chan Task, options.Threads)
     results := make(chan *Result)
 
-    for i := 0; i < options.threads; i++ {
-        go worker(tasks, results, options)
+    for i := 0; i < options.Threads; i++ {
+        go Worker(tasks, results, options)
     }
 
     lock.Add(1)
@@ -263,7 +262,7 @@ func startScan(hosts []string, services []ServicePort, options Option) {
         // Calculating the number of tasks
         totalTask := len(hosts) * len(services)
 
-        if ! options.redirectOutput && isPty() {
+        if ! options.RedirectOutput && IsPty() {
             writer = goterminal.New(os.Stdout)
             fmt.Fprintf(writer, "Scanning (0/%d) services...\n", totalTask)
             writer.Print()
@@ -276,8 +275,8 @@ func startScan(hosts []string, services []ServicePort, options Option) {
                 writer.Clear()
             }
 
-            if result.err == nil {
-                present(result)
+            if result.Error == nil {
+                Present(result)
             }
 
             if writer != nil {
@@ -297,10 +296,10 @@ func startScan(hosts []string, services []ServicePort, options Option) {
 
     for _, host := range hosts {
         for _, service := range services {
-            if options.transportLayerScan {
-                tasks <- &TransportLayerScanTask { host, service, options.timeout }
+            if options.TransportLayerScan {
+                tasks <- &TransportLayerScanTask { host, service, options.Timeout }
             } else {
-                tasks <- &HttpScanTask { host, service, options.proxyURL, options.timeout, false }
+                tasks <- &HttpScanTask { host, service, options.ProxyURL, options.Timeout, false }
             }
         }
     }
@@ -312,7 +311,7 @@ func startScan(hosts []string, services []ServicePort, options Option) {
 }
 
 // This works on Unix* system only :(
-func isPty() bool {
+func IsPty() bool {
     file, err := os.Stdin.Stat()
     if err != nil {
         return false
@@ -321,7 +320,7 @@ func isPty() bool {
     return (file.Mode() & os.ModeCharDevice) != 0
 }
 
-func nextAddr(address []byte) {
+func NextAddr(address []byte) {
     for i := len(address) - 1; i >= 0; i-- {
         address[i]++
         if address[i] > 0 {
@@ -330,17 +329,17 @@ func nextAddr(address []byte) {
     }
 }
 
-func isReserveAddr(address []byte) bool {
+func IsReserveAddr(address []byte) bool {
     return address[3] == 0 || address[3] == 0xff
 }
 
-func parseTarget(target string) []string {
+func ParseTarget(target string) []string {
     var result []string
     pattern := regexp.MustCompile(`([0-9]+\.){3}[0-9]+/[0-9]{1,2}`)
     if pattern.MatchString(target) {
-        ip, net, _ := net.ParseCIDR(target)
-        for address := ip.Mask(net.Mask); net.Contains(address); nextAddr(address) {
-            if isReserveAddr(address) {
+        ip, subNet, _ := net.ParseCIDR(target)
+        for address := ip.Mask(subNet.Mask); subNet.Contains(address); NextAddr(address) {
+            if IsReserveAddr(address) {
                 continue
             }
             result = append(result, address.String())
@@ -355,7 +354,7 @@ func parseTarget(target string) []string {
 /**
 * Shit code here to parse the humanable port list
  */
-func parsePort(ports string) []ServicePort {
+func ParsePort(ports string) []ServicePort {
     var services []ServicePort
     slices := strings.Split(ports, ",")
 
@@ -397,7 +396,7 @@ func parsePort(ports string) []ServicePort {
     return services
 }
 
-func initArguments() (Option, []string) {
+func InitArguments() (Option, []string) {
     ports := flag.String("port", "80", "List of port(s) to be scan, such as 80,8000-8009,s443 etc. Port starts with 's' prefix indicate that the connection will be negotiate with SSL/TLS. Similar starts with 'u' for UDP connection")
     filename := flag.String("file", "", "Specify a local file contains a list of URLs")
     threads := flag.Int("threads", 20, "Maximum number of threads")
@@ -415,29 +414,29 @@ func initArguments() (Option, []string) {
 
 func main() {
     var hosts []string
-    options, targets := initArguments()
+    options, targets := InitArguments()
 
-    if len(options.logFilename) > 0 {
-        handle, err := os.OpenFile(options.logFilename, os.O_RDWR | os.O_CREATE, 0755)
+    if len(options.LogFilename) > 0 {
+        handle, err := os.OpenFile(options.LogFilename, os.O_RDWR | os.O_CREATE, 0755)
         if err != nil {
             log.Fatal(err)
         }
 
         os.Stdout = handle
-        options.redirectOutput = true
+        options.RedirectOutput = true
     }
 
-    if options.filename != "" {
-        read := readTarget(options.filename)
+    if options.Filename != "" {
+        read := ReadTarget(options.Filename)
         targets = append(targets, read...)
     }
 
-    if options.proxy != "" {
-        proxyURL, err := url.Parse(options.proxy)
+    if options.Proxy != "" {
+        proxyURL, err := url.Parse(options.Proxy)
         if err != nil {
-            log.Fatal("Invalid proxy address " + options.proxy)
+            log.Fatal("Invalid proxy address " + options.Proxy)
         }
-        options.proxyURL = proxyURL
+        options.ProxyURL = proxyURL
     }
 
     if len(targets) == 0 {
@@ -446,12 +445,12 @@ func main() {
 
     for _, target := range targets {
         // Parsing the targets before launch the scanning in case there are CIDRs in target hosts
-        for _, host := range parseTarget(target) {
+        for _, host := range ParseTarget(target) {
             hosts = append(hosts, host)
         }
     }
 
-    services := parsePort(options.ports)
+    services := ParsePort(options.Ports)
 
-    startScan(hosts, services, options)
+    StartScan(hosts, services, options)
 }
